@@ -6,6 +6,14 @@ using System.Globalization;
 
 namespace Hex2Bin
 {
+	enum FileFormat
+	{
+		Auto,
+		Binary,
+		Hex,
+		Jam
+	}
+
     class Program
     {
 		static byte[] Memory = null;
@@ -29,6 +37,9 @@ Hex2Bin [options] in-file.hex|bin|s|jam [out-file]
     -f[ill]=value       fill value for empty memory
     -mcu=PIC24FJ256     allocate memory ones (256K)
     -mcu=PIC24FJ128     allocate memory ones (128K)
+    -bin                force input format to BINARY format
+    -hex                force input format to HEX format
+    -jam                force input format to JAM format
 Process .jam (Microchip format) file and make one image file
         .hex Intel hex format file
         .s   Motorola format file
@@ -42,7 +53,7 @@ Process .jam (Microchip format) file and make one image file
             string fileIn = null;
             string fileOut = null;
 			int exitCode = 0;
-
+			FileFormat input_type = FileFormat.Auto;
 			if (args.Length == 0)
 			{
 				usageHelp();
@@ -65,6 +76,15 @@ Process .jam (Microchip format) file and make one image file
 
 						switch (option[0].ToLowerInvariant())
 						{
+							case "hex":
+								input_type = FileFormat.Hex;
+								break;
+							case "bin":
+								input_type = FileFormat.Binary;
+								break;
+							case "jam":
+								input_type = FileFormat.Jam;
+								break;
 							case "mcu":
 								#region Set PIC type 
 								switch (value.ToUpperInvariant())
@@ -160,7 +180,20 @@ Process .jam (Microchip format) file and make one image file
 							Console.WriteLine(string.Format("Input file {0} not found.", fileIn));
 						else
 						{
-							switch (Path.GetExtension(fileIn).ToLowerInvariant())
+							string ext = Path.GetExtension(fileIn).ToLowerInvariant();
+							switch (input_type)
+							{
+								case FileFormat.Binary:
+									ext = ".bin";
+									break;
+								case FileFormat.Hex:
+									ext = ".hex";
+									break;
+								case FileFormat.Jam:
+									ext = ".jam";
+									break;
+							}
+							switch (ext)
 							{
 								case ".jam":
 									// Process Microchip JAM file
@@ -198,9 +231,7 @@ Process .jam (Microchip format) file and make one image file
 							#region Save internal memory to binary file 
 							if (exitCode == 0 && Memory != null && Memory.Length > 0)
 							{
-								Console.WriteLine("Minimum address: 0x{0:X}", AddressMin);
-								Console.WriteLine("Maximum address: 0x{0:X}", AddressMax);
-
+								Console.WriteLine("Address range: 0x{0:X}-0x{1:X}", AddressMin, AddressMax);
 								if (!ScanOnly)
 								{
 									if (fileOut == null)
