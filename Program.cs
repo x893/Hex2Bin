@@ -9,7 +9,7 @@ namespace Hex2Bin
 	enum FileFormat
 	{
 		Auto,
-		Binary,
+		Bin,
 		Hex,
 		Jam
 	}
@@ -17,12 +17,28 @@ namespace Hex2Bin
     class Program
     {
 		static byte[] Memory = null;
+
 		static uint MemoryLow = uint.MaxValue;
 		static uint MemoryHigh = uint.MinValue;
+
 		static uint AddressMax = 0;
 		static uint AddressMin = uint.MaxValue;
+
 		static uint BaseAddress = 0;
+		static bool BaseAddressDefine = false;
+
+		static uint MemoryStart = 0;
+		static bool IsMemoryStart = false;
+
+		static uint MemoryEnd = 0;
+		static bool IsMemoryEnd = false;
+
+		static uint MemoryLength = 0;
+		static bool IsMemoryLength = false;
+
 		static bool ScanOnly = false;
+		static bool MakeCode = false;
+		static bool ExtractCode = false;
 		static byte EmptyValue = 0xFF;
 
 		const uint BLOCK_SIZE = 1024;
@@ -33,8 +49,13 @@ namespace Hex2Bin
 Hex2Bin [options] in-file.hex|bin|s|jam [out-file]
     -h[elp]             display this text
     -b[ase]=address     set base address (0x... for hex)
+    -ml=length          set memory length (0x... for hex)
+	-ms=address         set memory start address (0x... for hex)
+    -me=address         set memory end address (0x... for hex)
     -s[can]             scan file for min/max addresses
+	-c[ode]             convert to C text
     -f[ill]=value       fill value for empty memory
+    -ex[tract]          extract from base (-b) to end (-e) or length (-l)
     -mcu=PIC24FJ256     allocate memory ones (256K)
     -mcu=PIC24FJ128     allocate memory ones (128K)
     -bin                force input format to BINARY format
@@ -49,209 +70,520 @@ Process .jam (Microchip format) file and make one image file
 		}
 
 		static void Main(string[] args)
-        {
-            string fileIn = null;
-            string fileOut = null;
+		{
+			string fileIn = null;
+			string fileOut = null;
 			int exitCode = 0;
 			FileFormat input_type = FileFormat.Auto;
 			if (args.Length == 0)
 			{
 				usageHelp();
-				exitCode = 1;
+				Environment.Exit(1);
 			}
-			else
+
+			#region Options
+			foreach (string arg in args)
 			{
-				foreach (string arg in args)
+				if (arg.StartsWith("-", StringComparison.InvariantCulture) ||
+					arg.StartsWith("/", StringComparison.InvariantCulture)
+					)
 				{
-					if (arg.StartsWith("-", StringComparison.InvariantCulture) ||
-						arg.StartsWith("/", StringComparison.InvariantCulture)
-						)
+					#region Process options
+
+					string[] option = arg.Substring(1).Split(new char[] { '=' }, StringSplitOptions.RemoveEmptyEntries);
+					string value = string.Empty;
+					if (option.Length == 2)
+						value = option[1].Trim();
+
+					switch (option[0].ToLowerInvariant())
 					{
-						#region Process options 
-
-						string[] option = arg.Substring(1).Split(new char[] { '=' }, StringSplitOptions.RemoveEmptyEntries);
-						string value = string.Empty;
-						if (option.Length == 2)
-							value = option[1].Trim();
-
-						switch (option[0].ToLowerInvariant())
-						{
-							case "hex":
-								input_type = FileFormat.Hex;
-								break;
-							case "bin":
-								input_type = FileFormat.Binary;
-								break;
-							case "jam":
-								input_type = FileFormat.Jam;
-								break;
-							case "mcu":
-								#region Set PIC type 
-								switch (value.ToUpperInvariant())
-								{
-									case "PIC24FJ256":
-										Memory = new byte[256 * 1024];
-										break;
-									case "PIC24FJ128":
-										Memory = new byte[128 * 1024];
-										break;
-									default:
-										Console.WriteLine(string.Format("Unknown -mcu {0}", value));
-										exitCode = 1;
-										break;
-								}
-								break;
-								#endregion
-							case "b":
-							case "base":
-								#region Set base address 
-								if (!string.IsNullOrEmpty(value))
-								{
-									if (value.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
-									{	// Hex format 0x....
-										if (uint.TryParse(value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out BaseAddress))
-											break;
-									}
-									else
-									{
-										if (uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out BaseAddress))
-											break;
-									}
-								}
-								exitCode = 1;
-								break;
-								#endregion
-							case "f":
-							case "fill":
-								#region Set empty memory value
-								if (!string.IsNullOrEmpty(value))
-								{
-									if (value.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
-									{	// Hex format 0x
-										if (byte.TryParse(value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out EmptyValue))
-											break;
-									}
-									else
-									{	// Decimal format
-										if (byte.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out EmptyValue))
-											break;
-									}
-								}
-								exitCode = 1;
-								break;
-								#endregion
-							case "s":
-							case "scan":
-								#region Set scan file only mode 
-								ScanOnly = true;
-								break;
-								#endregion
-							default:
-								#region Unknown option 
-								Console.WriteLine(string.Format("Unknown option {0}", arg));
-								exitCode = 1;
-								break;
-								#endregion
-						}
-						#endregion
-					}
-					else if (fileIn == null)
-						fileIn = arg;	// First paramter as input file
-					else if (fileOut == null)
-						fileOut = arg;	// Second paramter as output file
-					else
-					{
-						Console.WriteLine("Too many files define.");
-						exitCode = 1;
-					}
-					if (exitCode != 0)
-						break;
-				}
-
-				if (exitCode == 0)
-				{
-					exitCode = 1;
-
-					if (string.IsNullOrEmpty(fileIn))
-						Console.WriteLine("Input file empty.");
-					else
-					{
-						if (!File.Exists(fileIn))
-							Console.WriteLine(string.Format("Input file {0} not found.", fileIn));
-						else
-						{
-							string ext = Path.GetExtension(fileIn).ToLowerInvariant();
-							switch (input_type)
+						case "hex":
+							input_type = FileFormat.Hex;
+							break;
+						case "bin":
+							input_type = FileFormat.Bin;
+							break;
+						case "jam":
+							input_type = FileFormat.Jam;
+							break;
+						case "mcu":
+							#region Set PIC type
+							switch (value.ToUpperInvariant())
 							{
-								case FileFormat.Binary:
-									ext = ".bin";
+								case "PIC24FJ256":
+									Memory = new byte[256 * 1024];
 									break;
-								case FileFormat.Hex:
-									ext = ".hex";
-									break;
-								case FileFormat.Jam:
-									ext = ".jam";
-									break;
-							}
-							switch (ext)
-							{
-								case ".jam":
-									// Process Microchip JAM file
-									// Each line is HEX file name
-									using (TextReader s = new StreamReader(fileIn))
-									{
-										string filename;
-										while ((filename = s.ReadLine()) != null)
-										{
-											filename = filename.Trim();
-											if (filename.Length == 0)
-												continue;
-											Console.WriteLine(string.Format("Process file:{0}", filename));
-											exitCode = hex2bin(filename);
-											if (exitCode != 0)
-												break;
-										}
-									}
-									break;
-
-								case ".s":
-								case ".hex":
-									exitCode = hex2bin(fileIn);
-									break;
-
-								case ".bin":
-									exitCode = bin2hex(fileIn);
+								case "PIC24FJ128":
+									Memory = new byte[128 * 1024];
 									break;
 								default:
-									Console.WriteLine("Unknown extension {0}", Path.GetExtension(fileIn).ToLowerInvariant());
-									exitCode = -1;
+									Console.WriteLine(string.Format("Unknown -mcu {0}", value));
+									exitCode = 1;
 									break;
 							}
-
-							#region Save internal memory to binary file 
-							if (exitCode == 0 && Memory != null && Memory.Length > 0)
+							break;
+							#endregion
+						case "b":
+						case "base":
+							#region Set base address
+							if (!string.IsNullOrEmpty(value))
 							{
-								Console.WriteLine("Address range: 0x{0:X}-0x{1:X}", AddressMin, AddressMax);
-								if (!ScanOnly)
+								if (IsMemoryEnd)
 								{
-									if (fileOut == null)
-										fileOut = string.Concat(Path.GetFileNameWithoutExtension(fileIn), ".bin");
-
-									using (Stream s = File.Open(fileOut, File.Exists(fileOut) ? FileMode.Truncate : FileMode.Create, FileAccess.Write))
-									{
-										s.Write(Memory, 0, (int)(AddressMax - AddressMin + 1));
-										s.Close();
-									}
+									Console.WriteLine("Can set Base Address only ones.");
+								}
+								else if (value.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
+								{	// Hex format 0x....
+									if ((BaseAddressDefine = uint.TryParse(value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out BaseAddress)))
+										break;
+								}
+								else
+								{
+									if ((BaseAddressDefine = uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out BaseAddress)))
+										break;
 								}
 							}
+							exitCode = 1;
+							break;
 							#endregion
-						}
+						case "ms":
+							#region Set start address
+							if (!string.IsNullOrEmpty(value))
+							{
+								if (IsMemoryStart)
+								{
+									Console.WriteLine("Can set Start Address only ones.");
+								}
+								else if (value.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
+								{	// Hex format 0x....
+									if ((IsMemoryStart = uint.TryParse(value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out MemoryStart)))
+										break;
+								}
+								else
+								{
+									if ((IsMemoryStart = uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out MemoryStart)))
+										break;
+								}
+							}
+							exitCode = 1;
+							break;
+							#endregion
+						case "me":
+							#region Set end address
+							if (!string.IsNullOrEmpty(value))
+							{
+								if (IsMemoryLength)
+								{
+									Console.WriteLine("Can't set both End Address and Length");
+								}
+								else if (IsMemoryEnd)
+								{
+									Console.WriteLine("Can set End Address only ones.");
+								}
+								else if (value.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
+								{	// Hex format 0x....
+									if ((IsMemoryEnd = uint.TryParse(value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out MemoryEnd)))
+										break;
+								}
+								else
+								{
+									if ((IsMemoryEnd = uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out MemoryEnd)))
+										break;
+								}
+							}
+							exitCode = 1;
+							break;
+							#endregion
+						case "ml":
+							#region Set length
+							if (!string.IsNullOrEmpty(value))
+							{
+								if (IsMemoryEnd)
+								{
+									Console.WriteLine("Can't set both End Address and Length");
+								}
+								else if (IsMemoryLength)
+								{
+									Console.WriteLine("Can set Length only ones.");
+								}
+								else if (value.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
+								{	// Hex format 0x....
+									if ((IsMemoryLength = uint.TryParse(value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out MemoryLength)))
+										break;
+								}
+								else
+								{
+									if ((IsMemoryLength = uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out MemoryLength)))
+										break;
+								}
+							}
+							exitCode = 1;
+							break;
+							#endregion
+						case "f":
+						case "fill":
+							#region Set empty memory value
+							if (!string.IsNullOrEmpty(value))
+							{
+								if (value.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
+								{	// Hex format 0x
+									if (byte.TryParse(value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out EmptyValue))
+										break;
+								}
+								else
+								{	// Decimal format
+									if (byte.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out EmptyValue))
+										break;
+								}
+							}
+							exitCode = 1;
+							break;
+							#endregion
+						case "s":
+						case "scan":
+							ScanOnly = true;
+							break;
+						case "c":
+						case "code":
+							MakeCode = true;
+							break;
+						case "ex":
+						case "extract":
+							ExtractCode = true;
+							break;
+						default:
+							#region Unknown option
+							Console.WriteLine(string.Format("Unknown option {0}", arg));
+							exitCode = 1;
+							break;
+							#endregion
 					}
+					#endregion
+				}
+				else if (fileIn == null)
+					fileIn = arg;	// First paramter as input file
+				else if (fileOut == null)
+					fileOut = arg;	// Second paramter as output file
+				else
+				{
+					Console.WriteLine("Too many files define.");
+					exitCode = 1;
+				}
+				if (exitCode != 0)
+					Environment.Exit(exitCode);
+			}
+			#endregion
+
+			if (string.IsNullOrEmpty(fileIn))
+			{
+				Console.WriteLine("No input file.");
+				Environment.Exit(1);
+			}
+
+			if (!File.Exists(fileIn))
+			{
+				Console.WriteLine(string.Format("Input file {0} not found.", fileIn));
+				Environment.Exit(1);
+			}
+
+			#region Load file
+			string ext = Path.GetExtension(fileIn).ToLowerInvariant();
+			if (input_type == FileFormat.Auto)
+			{
+				switch (ext)
+				{
+					case ".bin":
+						input_type = FileFormat.Bin;
+						break;
+					case ".hex":
+						input_type = FileFormat.Hex;
+						break;
+					case ".jam":
+						input_type = FileFormat.Jam;
+						break;
+					default:
+						Console.WriteLine("Unknown extension {0}", ext);
+						Environment.Exit(1);
+						break;
 				}
 			}
-            Environment.Exit(exitCode);
-        }
 
+			switch (input_type)
+			{
+				case FileFormat.Jam:
+					input_type = FileFormat.Hex;
+					#region Process Microchip JAM file
+					// Each line is HEX file name
+					using (TextReader s = new StreamReader(fileIn))
+					{
+						string filename;
+						while ((filename = s.ReadLine()) != null)
+						{
+							filename = filename.Trim();
+							if (filename.Length == 0)
+								continue;
+							Console.WriteLine(string.Format("Process file:{0}", filename));
+							exitCode = loadHex(filename);
+							if (exitCode != 0)
+								break;
+						}
+					}
+					break;
+					#endregion
+				case FileFormat.Hex:
+					exitCode = loadHex(fileIn);
+					break;
+				case FileFormat.Bin:
+					exitCode = loadBin(fileIn);
+					break;
+			}
+
+			if ((exitCode == 0) && (Memory == null || Memory.Length == 0))
+			{
+				Console.WriteLine("Empty input data.");
+				exitCode = 1;
+			}
+
+			if (exitCode != 0)
+				Environment.Exit(exitCode);
+			#endregion
+
+			Console.WriteLine("Memory Address range: 0x{0:X}-0x{1:X}", AddressMin, AddressMax);
+
+			#region Check Addresses
+			if (!IsMemoryStart)
+				MemoryStart = AddressMin;
+			if (IsMemoryLength)
+				MemoryEnd = MemoryStart + MemoryLength - 1;
+			else if (!IsMemoryEnd)
+				MemoryEnd = AddressMax;
+
+			if (AddressMin != 0 && MemoryStart < AddressMin)
+			{
+				Console.WriteLine("Start Address must be great or equal Memory Min. Address");
+				Environment.Exit(1);
+			}
+			if (MemoryEnd < MemoryStart)
+			{
+				Console.WriteLine("End Address must be great or equal Start Address");
+				Environment.Exit(1);
+			}
+			else if (MemoryEnd > AddressMax)
+			{
+				Console.WriteLine("End Address must be less than Memory Max. Address");
+				Environment.Exit(1);
+			}
+			#endregion
+
+			#region Save internal memory to binary file
+
+			if (MakeCode)
+			{
+				#region MakeCode
+
+				if (fileOut == null)
+					fileOut = string.Concat(Path.GetFileNameWithoutExtension(fileIn), ".c");
+
+				using (FileStream fs = new FileStream(fileOut, File.Exists(fileOut) ? FileMode.Truncate : FileMode.Create, FileAccess.Write))
+				{
+					using (StreamWriter sw = new StreamWriter(fs, Encoding.Default))
+					{
+						int row_count = 0;
+						int length = (int)(MemoryEnd - MemoryStart + 1);
+						sw.Write(string.Format(@"
+#include <avr/pgmspace.h>
+
+/*
+ * File: {0}
+ * Address range: 0x{1:X}-0x{2:X}
+ */
+const PROGMEM uint8_t {3}[{4}]
+// __attribute__((used))
+// __attribute__((section("".flash_0x{1:X}"")))
+= {{",
+							fileIn,
+							BaseAddress, MemoryEnd,
+							Path.GetFileNameWithoutExtension(fileIn).Replace("-", "_"),
+							length
+							)
+						);
+
+						int address = (int)(MemoryStart - AddressMin);
+						while (length != 0)
+						{
+							length--;
+							if (row_count == 0)
+							{
+								if (length != 0)
+									sw.Write(",");
+								sw.Write("\r\n\t");
+								row_count = 16;
+							}
+							else
+							{
+								sw.Write(", ");
+							}
+							--row_count;
+
+							sw.Write(string.Format("0x{0:X2}", Memory[address++]));
+						}
+						sw.Write(@"
+};
+");
+						sw.Close();
+					}
+				}
+				#endregion
+			}
+			else if (ExtractCode)
+			{
+				#region Extract
+				if (fileOut == null)
+				{
+					Console.WriteLine("Must define output file name");
+					Environment.Exit(1);
+				}
+				exitCode = writeToBin(fileOut);
+				#endregion
+			}
+			else if (!ScanOnly)
+			{
+				switch (input_type)
+				{
+					case FileFormat.Bin:
+						if (fileOut == null)
+							fileOut = string.Concat(Path.GetFileNameWithoutExtension(fileIn), ".hex");
+						exitCode = writeToHex(fileOut);
+						break;
+					case FileFormat.Hex:
+						if (fileOut == null)
+							fileOut = string.Concat(Path.GetFileNameWithoutExtension(fileIn), ".bin");
+						exitCode = writeToBin(fileOut);
+						break;
+					default:
+						break;
+				}
+			}
+			#endregion
+			Environment.Exit(exitCode);
+		}
+
+		private static int writeToBin(string fileOut)
+		{
+			int exitcode = 0;
+			try
+			{
+				using (Stream s = File.Open(fileOut, File.Exists(fileOut) ? FileMode.Truncate : FileMode.Create, FileAccess.Write))
+				{
+					s.Write(Memory, (int)(MemoryStart - AddressMin), (int)(MemoryEnd - MemoryStart + 1));
+					s.Close();
+				}
+			}
+			catch(Exception ex)
+			{
+				Console.WriteLine(ex.Message);
+				exitcode = -1;
+			}
+			return exitcode;
+		}
+
+		#region loadBin(string fileIn)
+		/// <summary>
+		/// Convert binary file to hex format
+		/// </summary>
+		/// <param name="fileIn"></param>
+		/// <returns></returns>
+		private static int loadBin(string fileIn)
+		{
+			int exitCode = 0;
+
+			try
+			{
+				using (FileStream fs = new FileStream(fileIn, FileMode.Open))
+				{
+					using (BinaryReader b = new BinaryReader(fs))
+					{
+						Memory = new byte[fs.Length];
+						b.Read(Memory, 0, (int)fs.Length);
+						b.Close();
+					}
+					fs.Close();
+				}
+				if (Memory != null && Memory.Length > 0)
+				{
+					AddressMin = 0;
+					AddressMax = (uint)Memory.Length - 1;
+				}
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine(ex.Message);
+				exitCode = 1;
+			}
+			return exitCode;
+		}
+		#endregion
+
+		#region writeToHex(string fileOut)
+		private static int writeToHex(string fileOut)
+		{
+			uint out_address = BaseAddress;
+			uint hex_address = 0;
+			int exitCode = 0;
+
+			try
+			{
+				// Convert to HEX file
+				uint byte_index = MemoryStart;
+				StringBuilder sb = new StringBuilder(50);
+				uint cs;
+
+				using (FileStream fs = new FileStream(fileOut, FileMode.Create, FileAccess.Write))
+				{
+					using (TextWriter w = new StreamWriter(fs))
+					{
+						while (byte_index <= MemoryEnd)
+						{
+							sb.Remove(0, sb.Length);
+							if (hex_address != (out_address & 0xFFFF0000))
+							{
+								cs = 2 + (uint)INTEL_COMMAND.EXTEND_ADDR + ((out_address >> 16) & 0xFF) + ((out_address >> 24) & 0xFF);
+								sb.AppendFormat(":020000{0:X2}{1:X4}{2:X2}", (uint)INTEL_COMMAND.EXTEND_ADDR, (out_address >> 16) & 0xFFFF, ((cs ^ 0xFF) + 1) & 0xFF);
+								w.WriteLine(sb.ToString());
+								hex_address = (out_address & 0xFFFF0000);
+								sb.Remove(0, sb.Length);
+							}
+
+							uint byte_count = Math.Min((uint)16, (uint)(MemoryEnd - byte_index + 1));
+							sb.AppendFormat(":{0:X2}{1:X4}{2:X2}", byte_count, out_address & 0xFFFF, (uint)INTEL_COMMAND.DATA);
+							cs = byte_count + (out_address & 0xFF) + (out_address >> 8 & 0xFF) + (uint)INTEL_COMMAND.DATA;
+							while (byte_count > 0)
+							{
+								byte data = Memory[byte_index++];
+								cs += data;
+								sb.AppendFormat("{0:X2}", data);
+								out_address++;
+								--byte_count;
+							}
+							sb.AppendFormat("{0:X2}", ((cs ^ 0xFF) + 1) & 0xFF);
+							w.WriteLine(sb.ToString());
+						}
+						w.WriteLine(":00000001FF");
+						w.Close();
+					}
+					fs.Close();
+				}
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine(ex.Message);
+				exitCode = 1;
+			}
+			return exitCode;
+		}
+		#endregion
+
+		#region loadHex(string fileIn)
 		enum MOTOROLA_COMMAND : byte
 		{
 			CMD_00 = 0x00,
@@ -277,93 +609,12 @@ Process .jam (Microchip format) file and make one image file
 			DATA_LOOP = 0x10
 		}
 
-		#region bin2hex(string fileIn) 
-		/// <summary>
-		/// Convert binary file to hex format
-		/// </summary>
-		/// <param name="fileIn"></param>
-		/// <returns></returns>
-		private static int bin2hex(string fileIn)
-		{
-			uint out_address = BaseAddress;
-			uint hex_address = 0;
-			int exitCode = 0;
-
-			try
-			{
-				using (FileStream fs = new FileStream(fileIn, FileMode.Open))
-				{
-					using (BinaryReader b = new BinaryReader(fs))
-					{
-						Memory = new byte[fs.Length];
-						b.Read(Memory, 0, (int)fs.Length);
-						b.Close();
-					}
-					fs.Close();
-				}
-
-				if (Memory != null && Memory.Length > 0)
-				{
-					int byte_index = 0;
-					StringBuilder sb = new StringBuilder(50);
-					uint cs;
-
-					string fileOut = string.Concat(Path.GetFileNameWithoutExtension(fileIn), ".hex");
-
-					using (FileStream fs = new FileStream(fileOut, FileMode.Create, FileAccess.Write))
-					{
-						using (TextWriter w = new StreamWriter(fs))
-						{
-							while (byte_index < Memory.Length)
-							{
-								sb.Remove(0, sb.Length);
-								if (hex_address != (out_address & 0xFFFF0000))
-								{
-									cs = 2 + (uint)INTEL_COMMAND.EXTEND_ADDR + ((out_address >> 16) & 0xFF) + ((out_address >> 24) & 0xFF);
-									sb.AppendFormat(":020000{0:X2}{1:X4}{2:X2}", (uint)INTEL_COMMAND.EXTEND_ADDR, (out_address >> 16) & 0xFFFF, ((cs ^ 0xFF) + 1) & 0xFF);
-									w.WriteLine(sb.ToString());
-									hex_address = (out_address & 0xFFFF0000);
-									sb.Remove(0, sb.Length);
-								}
-
-								uint byte_count = Math.Min((uint)16, (uint)(Memory.Length - byte_index));
-								sb.AppendFormat(":{0:X2}{1:X4}{2:X2}", byte_count, out_address & 0xFFFF, (uint)INTEL_COMMAND.DATA);
-								cs = byte_count + (out_address & 0xFF) + (out_address >> 8 & 0xFF) + (uint)INTEL_COMMAND.DATA;
-								while (byte_count > 0)
-								{
-									byte data = Memory[byte_index++];
-									cs += data;
-									sb.AppendFormat("{0:X2}", data);
-									out_address++;
-									--byte_count;
-								}
-								sb.AppendFormat("{0:X2}", ((cs ^ 0xFF) + 1) & 0xFF);
-								w.WriteLine(sb.ToString());
-							}
-							w.WriteLine(":00000001FF");
-							w.Close();
-						}
-						fs.Close();
-					}
-				}
-			}
-			catch (Exception ex)
-			{
-				Console.WriteLine(ex.Message);
-				exitCode = 1;
-			}
-			Memory = null;
-			return exitCode;
-		}
-		#endregion
-
-		#region hex2bin(string fileIn) 
 		/// <summary>
 		/// Convert HEX|S file to internal byte array
 		/// </summary>
 		/// <param name="fileIn"></param>
-		/// <returns></returns>
-		private static int hex2bin(string fileIn)
+		/// <returns>error code (0=none)</returns>
+		private static int loadHex(string fileIn)
         {
 			uint extend_address = 0, start_address = 0, segment_address = 0, linear_address = 0;
             string line;
@@ -528,7 +779,7 @@ Process .jam (Microchip format) file and make one image file
 								if (fail)
 									Console.WriteLine(string.Format("Bad Start Segment records line {0}.", lineNumber));
 								else
-									Console.WriteLine(string.Format("Start Segment: {0:X}.", start_address));
+									Console.WriteLine(string.Format("Start Segment: {0:X}", start_address));
 							}
 							break;
 							#endregion
